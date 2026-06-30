@@ -1,0 +1,37 @@
+{
+  "color": {
+    "action.primary": "color.blue_600",
+    "action.button": "color.blue_500",
+    "action.primaryAlpha50": "color.blue_600_alpha_50",
+    "action.primaryAlpha80": "color.blue_600_alpha_80",
+    "surface.app": "color.gray_050",
+    "surface.canvasDark": "color.gray_900",
+    "border.default": "color.gray_300",
+    "border.hover": "color.gray_500",
+    "text.muted": "color.gray_600",
+    "text.defaultDark": "color.black_87",
+    "text.onAction": "color.white"
+  },
+  "radius": {
+    "control": "radius.sm",
+    "overlay": "radius.md",
+    "textButton": "radius.pill"
+  },
+  "spacing": {
+    "controlPadding": "spacing.xs",
+    "fieldGap": "spacing.sm",
+    "inlineGap": "spacing.md",
+    "dialogPadding": "spacing.lg"
+  },
+  "font": {
+    "caption": "fontSize.caption",
+    "body": "fontSize.body",
+    "control": "fontSize.control",
+    "input": "fontSize.input"
+  },
+  "motion": {
+    "none": "duration.instant",
+    "hover": "duration.fast",
+    "overlay": "duration.normal"
+  }
+}

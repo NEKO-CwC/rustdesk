@@ -1,0 +1,64 @@
+{
+  "artifact_type": "workflow-state",
+  "workflow": "design-to-implementation-workflow",
+  "workflow_version": 2,
+  "owner": "design-to-implementation-workflow skill",
+  "purpose": "端到端桥接：PRD 冻结 -> 设计 -> 任务实现 -> 迭代验收 -> 收敛。",
+  "edit_policy": "以读取为主；仅在运行本 workflow 或用户明确要求时更新",
+  "input_artifacts": [
+    "prd.md",
+    "design.md",
+    "design-handoff.md"
+  ],
+  "ground_truth": [
+    "prd.md",
+    "design.md",
+    "design-handoff.md",
+    "tasks/",
+    "traceability-matrix.md",
+    "implementation-handoff.md"
+  ],
+  "artifact_tiers": {
+    "persistent": [
+      "manifest.json",
+      "workflow-state.json",
+      "prd.md",
+      "design.md",
+      "design-handoff.md",
+      "tasks/",
+      "traceability-matrix.md",
+      "implementation-handoff.md",
+      "implementation-log.md",
+      "screenshots/current/",
+      "screenshots/accepted/",
+      "docs/design-system/",
+      "docs/project-map/"
+    ],
+    "transient": [
+      "*-draft.md",
+      "*-audit-round-*.md",
+      "*-packet.md",
+      "*-card*.md",
+      "implementation-plan.md",
+      "task-list.md",
+      "design-brief.md",
+      "competitive-research.md"
+    ],
+    "ephemeral": [
+      ".scratchpad/",
+      "screenshots/tmp/"
+    ],
+    "archive": [
+      "archive/**/*.md"
+    ]
+  },
+  "working_artifacts": [
+    "implementation-baseline.md",
+    "implementation-plan.md",
+    "task-list.md",
+    "acceptance-criteria.md",
+    "design-review.md",
+    "implementation-log.md"
+  ],
+  "normal_docs_export": "只在 Phase 5 交接时，将已经最终定稿并经用户确认的输出复制到 docs/。"
+}

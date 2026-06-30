@@ -56,3 +56,21 @@ vcpkg_installed
 flutter/lib/generated_plugin_registrant.dart
 libsciter.dylib
 flutter/web/
+
+# design-to-implementation workflow tiers
+.workflow/**/.scratchpad/
+.workflow/**/screenshots/tmp/
+.workflow/design-implementation/**/*-draft.md
+.workflow/design-implementation/**/*-audit-round-*.md
+.workflow/design-implementation/**/*-packet.md
+.workflow/design-implementation/**/*-card*.md
+.workflow/design-implementation/**/implementation-plan.md
+.workflow/design-implementation/**/task-list.md
+.workflow/design-implementation/**/design-brief.md
+.workflow/design-implementation/**/competitive-research.md
+.workflow/design-implementation/archive/**/*.bin
+
+!.workflow/design-implementation/screenshots/current/
+!.workflow/design-implementation/screenshots/current/*.png
+!.workflow/design-implementation/screenshots/accepted/
+!.workflow/design-implementation/screenshots/accepted/*.png

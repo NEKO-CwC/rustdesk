@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
-    net::{SocketAddr, ToSocketAddrs},
+    net::{Ipv6Addr, SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, RwLock},
     task::Poll,
 };
@@ -2415,6 +2415,174 @@ async fn test_bind_ipv6() -> ResultType<SocketAddr> {
     Ok(socket.local_addr()?)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ipv6CandidateRejectReason {
+    Loopback,
+    Unspecified,
+    Multicast,
+    UniqueLocal,
+    LinkLocal,
+    Documentation,
+    NonGlobalUnicast,
+}
+
+impl Ipv6CandidateRejectReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Unspecified => "unspecified",
+            Self::Multicast => "multicast",
+            Self::UniqueLocal => "unique-local",
+            Self::LinkLocal => "link-local",
+            Self::Documentation => "documentation",
+            Self::NonGlobalUnicast => "not-in-2000::/3",
+        }
+    }
+}
+
+fn ipv6_candidate_reject_reason(ip: Ipv6Addr) -> Option<Ipv6CandidateRejectReason> {
+    if ip.is_loopback() {
+        return Some(Ipv6CandidateRejectReason::Loopback);
+    }
+    if ip.is_unspecified() {
+        return Some(Ipv6CandidateRejectReason::Unspecified);
+    }
+    if ip.is_multicast() {
+        return Some(Ipv6CandidateRejectReason::Multicast);
+    }
+
+    let first_segment = ip.segments()[0];
+    if (first_segment & 0xfe00) == 0xfc00 {
+        return Some(Ipv6CandidateRejectReason::UniqueLocal);
+    }
+    if (first_segment & 0xffc0) == 0xfe80 {
+        return Some(Ipv6CandidateRejectReason::LinkLocal);
+    }
+    if first_segment == 0x2001 && ip.segments()[1] == 0x0db8 {
+        return Some(Ipv6CandidateRejectReason::Documentation);
+    }
+    if (first_segment & 0xe000) != 0x2000 {
+        return Some(Ipv6CandidateRejectReason::NonGlobalUnicast);
+    }
+    None
+}
+
+fn is_public_ipv6_candidate(ip: Ipv6Addr) -> bool {
+    ipv6_candidate_reject_reason(ip).is_none()
+}
+
+fn sorted_public_ipv6_candidates<I>(ips: I) -> Vec<Ipv6Addr>
+where
+    I: IntoIterator<Item = Ipv6Addr>,
+{
+    let mut candidates = ips
+        .into_iter()
+        .filter(|ip| is_public_ipv6_candidate(*ip))
+        .collect::<Vec<_>>();
+    // Numeric sorting gives a deterministic single-candidate choice without
+    // relying on OS-specific interface enumeration order.
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+#[cfg(not(target_os = "ios"))]
+fn interface_ipv6_candidates() -> Vec<Ipv6Addr> {
+    let mut candidates = Vec::new();
+    for interface in default_net::get_interfaces() {
+        for ipv6 in interface.ipv6 {
+            if let Some(reason) = ipv6_candidate_reject_reason(ipv6.addr) {
+                log::debug!(
+                    "Rejected interface IPv6 candidate before bind: {}",
+                    reason.as_str()
+                );
+            } else {
+                candidates.push(ipv6.addr);
+            }
+        }
+    }
+    sorted_public_ipv6_candidates(candidates)
+}
+
+#[cfg(target_os = "ios")]
+fn interface_ipv6_candidates() -> Vec<Ipv6Addr> {
+    Vec::new()
+}
+
+async fn bind_ipv6_candidate(ip: Ipv6Addr) -> ResultType<SocketAddr> {
+    let socket = UdpSocket::bind(SocketAddr::from((ip, 0))).await?;
+    Ok(socket.local_addr()?)
+}
+
+async fn first_bindable_interface_ipv6_candidate<I, F, Fut>(
+    candidates: I,
+    mut bind_candidate: F,
+) -> Option<SocketAddr>
+where
+    I: IntoIterator<Item = Ipv6Addr>,
+    F: FnMut(Ipv6Addr) -> Fut,
+    Fut: Future<Output = ResultType<SocketAddr>>,
+{
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    if candidates.is_empty() {
+        log::warn!("IPv6 candidate unavailable: no public interface IPv6 candidate found");
+        return None;
+    }
+
+    log::info!(
+        "Starting interface IPv6 fallback with {} candidate(s)",
+        candidates.len()
+    );
+    for candidate in candidates {
+        match bind_candidate(candidate).await {
+            Ok(mut addr) => {
+                addr.set_port(0);
+                log::debug!("Found public IPv6 address via interface fallback: {}", addr);
+                return Some(addr);
+            }
+            Err(err) => {
+                log::warn!("Rejected interface IPv6 candidate after bind failure: {err}");
+            }
+        }
+    }
+
+    log::warn!("IPv6 candidate unavailable: no interface IPv6 candidate could be bound");
+    None
+}
+
+async fn connected_ipv6_candidate_or_interface_fallback<F, Fut>(
+    mut addr: SocketAddr,
+    fallback: F,
+) -> Option<SocketAddr>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<SocketAddr>>,
+{
+    match addr.ip() {
+        std::net::IpAddr::V6(ip) => {
+            if let Some(reason) = ipv6_candidate_reject_reason(ip) {
+                log::debug!(
+                    "Rejected connected IPv6 candidate before cache: {}",
+                    reason.as_str()
+                );
+                fallback().await
+            } else {
+                addr.set_port(0);
+                log::debug!("Found public IPv6 address locally: {}", addr);
+                Some(addr)
+            }
+        }
+        std::net::IpAddr::V4(_) => {
+            log::warn!("IPv6 bind test returned a non-IPv6 socket address");
+            fallback().await
+        }
+    }
+}
+
+async fn test_interface_ipv6_fallback() -> Option<SocketAddr> {
+    first_bindable_interface_ipv6_candidate(interface_ipv6_candidates(), bind_ipv6_candidate).await
+}
+
 pub async fn test_ipv6() -> Option<tokio::task::JoinHandle<()>> {
     if PUBLIC_IPV6_ADDR
         .lock()
@@ -2428,21 +2596,19 @@ pub async fn test_ipv6() -> Option<tokio::task::JoinHandle<()>> {
     PUBLIC_IPV6_ADDR.lock().unwrap().1 = Some(Instant::now());
 
     match test_bind_ipv6().await {
-        Ok(mut addr) => {
-            if let std::net::IpAddr::V6(ip) = addr.ip() {
-                if !ip.is_loopback()
-                    && !ip.is_unspecified()
-                    && !ip.is_multicast()
-                    && (ip.segments()[0] & 0xe000) == 0x2000
-                {
-                    addr.set_port(0);
-                    PUBLIC_IPV6_ADDR.lock().unwrap().0 = Some(addr);
-                    log::debug!("Found public IPv6 address locally: {}", addr);
-                }
+        Ok(addr) => {
+            if let Some(addr) =
+                connected_ipv6_candidate_or_interface_fallback(addr, test_interface_ipv6_fallback)
+                    .await
+            {
+                PUBLIC_IPV6_ADDR.lock().unwrap().0 = Some(addr);
             }
         }
         Err(e) => {
             log::warn!("Failed to bind IPv6 socket: {}", e);
+            if let Some(addr) = test_interface_ipv6_fallback().await {
+                PUBLIC_IPV6_ADDR.lock().unwrap().0 = Some(addr);
+            }
         }
     }
     // Interestingly, on my macOS, sometimes my ipv6 works, sometimes not (test with ping6 or https://test-ipv6.com/).
@@ -2650,6 +2816,10 @@ mod tests {
         )
     }
 
+    fn ipv6(addr: &str) -> Ipv6Addr {
+        addr.parse().unwrap()
+    }
+
     // ThrottledInterval tick at the same time as tokio interval, if no sleeps
     #[allow(non_snake_case)]
     #[tokio::test]
@@ -2784,6 +2954,145 @@ mod tests {
         assert!(!is_public("localhost"));
         assert!(!is_public("https://rustdesk.computer.com"));
         assert!(!is_public("rustdesk.comhello.com"));
+    }
+
+    #[test]
+    fn test_ipv6_candidate_rejects_non_global_addresses() {
+        let cases = [
+            (Ipv6Addr::LOCALHOST, Ipv6CandidateRejectReason::Loopback),
+            (
+                Ipv6Addr::UNSPECIFIED,
+                Ipv6CandidateRejectReason::Unspecified,
+            ),
+            (ipv6("ff02::1"), Ipv6CandidateRejectReason::Multicast),
+            (ipv6("fc00::1"), Ipv6CandidateRejectReason::UniqueLocal),
+            (
+                ipv6("fd12:3456:789a::1"),
+                Ipv6CandidateRejectReason::UniqueLocal,
+            ),
+            (ipv6("fe80::1"), Ipv6CandidateRejectReason::LinkLocal),
+            (
+                ipv6("200:db8::1"),
+                Ipv6CandidateRejectReason::NonGlobalUnicast,
+            ),
+            (
+                ipv6("2001:db8::1"),
+                Ipv6CandidateRejectReason::Documentation,
+            ),
+        ];
+
+        for (ip, reason) in cases {
+            assert_eq!(ipv6_candidate_reject_reason(ip), Some(reason), "{ip}");
+            assert!(!is_public_ipv6_candidate(ip), "{ip}");
+        }
+    }
+
+    #[test]
+    fn test_ipv6_candidate_accepts_global_addresses() {
+        for ip in [
+            ipv6("2408:8220:1234::abcd"),
+            ipv6("2408:8220:1234::1"),
+            ipv6("2a01:4f8:c17:abcd::2"),
+        ] {
+            assert_eq!(ipv6_candidate_reject_reason(ip), None, "{ip}");
+            assert!(is_public_ipv6_candidate(ip), "{ip}");
+        }
+    }
+
+    #[test]
+    fn test_ipv6_candidate_selection_is_deterministic() {
+        let candidates = sorted_public_ipv6_candidates([
+            ipv6("2408:8220:1234::3"),
+            ipv6("fe80::1"),
+            ipv6("2408:8220:1234::1"),
+            ipv6("2408:8220:1234::3"),
+            ipv6("fc00::1"),
+            ipv6("2408:8220:1234::2"),
+        ]);
+
+        assert_eq!(
+            candidates,
+            vec![
+                ipv6("2408:8220:1234::1"),
+                ipv6("2408:8220:1234::2"),
+                ipv6("2408:8220:1234::3"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interface_ipv6_bind_fallback_uses_first_bindable_candidate() {
+        let first = ipv6("2408:8220:1234::1");
+        let second = ipv6("2408:8220:1234::2");
+        let mut attempts = Vec::new();
+
+        let result = first_bindable_interface_ipv6_candidate([first, second], |ip| {
+            attempts.push(ip);
+            async move { Ok(SocketAddr::from((ip, 35123))) }
+        })
+        .await;
+
+        assert_eq!(result, Some(SocketAddr::from((first, 0))));
+        assert_eq!(attempts, vec![first]);
+    }
+
+    #[tokio::test]
+    async fn test_interface_ipv6_bind_fallback_skips_failed_bind() {
+        let failed = ipv6("2408:8220:1234::1");
+        let selected = ipv6("2408:8220:1234::2");
+        let mut attempts = Vec::new();
+
+        let result = first_bindable_interface_ipv6_candidate([failed, selected], |ip| {
+            attempts.push(ip);
+            async move {
+                if ip == failed {
+                    bail!("bind failed");
+                }
+                Ok(SocketAddr::from((ip, 35124)))
+            }
+        })
+        .await;
+
+        assert_eq!(result, Some(SocketAddr::from((selected, 0))));
+        assert_eq!(attempts, vec![failed, selected]);
+    }
+
+    #[tokio::test]
+    async fn test_interface_ipv6_bind_fallback_returns_none_without_candidates() {
+        let result = first_bindable_interface_ipv6_candidate([], |ip| async move {
+            Ok(SocketAddr::from((ip, 35125)))
+        })
+        .await;
+
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_interface_ipv6_fallback_keeps_single_candidate() {
+        let first = ipv6("2408:8220:1234::1");
+        let second = ipv6("2408:8220:1234::2");
+        let mut attempts = Vec::new();
+
+        let result = first_bindable_interface_ipv6_candidate([first, second], |ip| {
+            attempts.push(ip);
+            async move { Ok(SocketAddr::from((ip, 35126))) }
+        })
+        .await;
+
+        assert_eq!(result, Some(SocketAddr::from((first, 0))));
+        assert_eq!(attempts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_interface_ipv6_fallback_runs_when_connected_candidate_is_rejected() {
+        let fallback = SocketAddr::from((ipv6("2408:8220:1234::2"), 0));
+        let result = connected_ipv6_candidate_or_interface_fallback(
+            SocketAddr::from((ipv6("2001:db8::1"), 35127)),
+            || async move { Some(fallback) },
+        )
+        .await;
+
+        assert_eq!(result, Some(fallback));
     }
 
     #[test]

@@ -934,6 +934,10 @@ async fn start_ipv6(
 ) -> bytes::Bytes {
     crate::test_ipv6().await;
     if let Some((socket, local_addr_v6)) = crate::get_ipv6_socket().await {
+        log::debug!(
+            "Prepared non-empty socket_addr_v6 for IPv6 responder: {}",
+            !local_addr_v6.is_empty()
+        );
         let server = server.clone();
         tokio::spawn(async move {
             allow_err!(
@@ -942,6 +946,7 @@ async fn start_ipv6(
         });
         return local_addr_v6;
     }
+    log::debug!("No socket_addr_v6 prepared for IPv6 responder");
     Default::default()
 }
 

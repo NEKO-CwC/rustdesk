@@ -450,8 +450,13 @@ impl Client {
         let mut msg_out = RendezvousMessage::new();
         let mut ipv6 = if crate::get_ipv6_punch_enabled() {
             if let Some((socket, addr)) = crate::get_ipv6_socket().await {
+                log::debug!(
+                    "Prepared non-empty socket_addr_v6 for punch request: {}",
+                    !addr.is_empty()
+                );
                 (Some(socket), Some(addr))
             } else {
+                log::debug!("No socket_addr_v6 prepared for punch request");
                 (None, None)
             }
         } else {

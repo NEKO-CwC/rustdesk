@@ -1,0 +1,18 @@
+{
+  "button": {
+    "radius": "radius.control",
+    "padding": "spacing.controlPadding",
+    "font": "font.control",
+    "background": "color.action.button",
+    "pressedBackground": "color.action.primary",
+    "hoverBorder": "color.border.hover"
+  },
+  "dialog": {
+    "radius": "radius.overlay",
+    "padding": "spacing.dialogPadding"
+  },
+  "settingsOption": {
+    "gap": "spacing.fieldGap",
+    "labelFont": "font.body"
+  }
+}

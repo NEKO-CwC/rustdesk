@@ -1,0 +1,38 @@
+{
+  "color": {
+    "blue_600": "#0071FF",
+    "blue_500": "#2C8CFF",
+    "blue_600_alpha_50": "#770071FF",
+    "blue_600_alpha_80": "#AA0071FF",
+    "gray_050": "#EFEFF2",
+    "gray_300": "#CCCCCC",
+    "gray_500": "#999999",
+    "gray_600": "#949494",
+    "gray_900": "#212121",
+    "black_87": "#DE000000",
+    "white": "#FFFFFF"
+  },
+  "radius": {
+    "xs": 2,
+    "sm": 5,
+    "md": 8,
+    "pill": 18
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 24
+  },
+  "fontSize": {
+    "caption": 12,
+    "body": 14,
+    "control": 12,
+    "input": 16
+  },
+  "duration": {
+    "instant": 0,
+    "fast": 120,
+    "normal": 180
+  }
+}
