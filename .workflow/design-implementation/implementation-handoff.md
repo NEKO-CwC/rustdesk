@@ -1,10 +1,10 @@
 # Implementation Handoff - Interface IPv6 Candidate P2P
 
-Status: code_verified_runtime_pending
+Status: client_verified_server_deploy_pending
 
 ## 当前状态
 
-macOS 本机代码级实现已完成并验证通过。Windows 同 commit 多设备 E2E 尚未执行，因此本 feature 还不能标记为端到端通过。
+macOS 本机代码级实现已完成并验证通过，客户端 fork 已推送。2026-07-01 的 Mac -> Windows 实测显示当前会话仍为 relay；根因证据指向旧 hbbs 未转发 `socket_addr_v6`，所以真实 E2E 的下一步是部署 patched `rustdesk-server`，不是继续只换客户端。
 
 当前分支：
 
@@ -36,6 +36,32 @@ neko=https://github.com/NEKO-CwC/rustdesk.git
   - 发起端补充 `socket_addr_v6` 是否非空的诊断日志。
 - `src/rendezvous_mediator.rs`
   - 受控端 IPv6 responder 补充 `socket_addr_v6` 是否非空的诊断日志。
+
+## Server 前置修正
+
+本地 server 补丁仓库：
+
+```text
+/Users/neko/Documents/Project/rustdesk-server
+```
+
+已完成并通过：
+
+```bash
+cargo check --locked
+cargo build --release --locked --bins
+```
+
+补丁内容：
+
+- `libs/hbb_common/protos/rendezvous.proto` 对齐客户端连接相关字段，包含 IPv6、UDP、UPnP、relay response 和 local addr 相关字段。
+- `src/rendezvous_server.rs` 转发 `socket_addr_v6`：`PunchHoleRequest -> PunchHole/FetchLocalAddr`，`PunchHoleSent/LocalAddr -> PunchHoleResponse`，`RelayResponse -> requester`。
+- hbbs debug log 记录 `socket_addr_v6_non_empty`，避免泄漏完整地址。
+
+注意：
+
+- 本机 release 产物是 macOS arm64：`target/release/hbbs`、`target/release/hbbr`，不能直接部署到 Linux server。
+- `rustdesk-server` 工作区里 `db_v2.sqlite3` 是本地运行产生的未提交脏文件，不属于补丁。
 
 ## 验证结果
 
@@ -114,7 +140,7 @@ git push -u neko feat/interface-ipv6-candidate-p2p
 
 任务：
 1. 记录 commit hash、artifact 路径、启动时间。
-2. 配置与 macOS 相同的自建 ID server / relay server / key。
+2. 确认自建 ID server 正在运行 patched hbbs，并配置与 macOS 相同的 ID server / relay server / key。
 3. 启用 enable-ipv6-punch 和 enable-udp-punch，关闭 force relay、proxy、WebSocket-only。
 4. 确认 Windows 有全局 IPv6：运行 ipconfig，记录 IPv6 地址；如果可以，ping -6 macOS 的 IPv6。如果 ICMP 被阻断，记录 ICMP blocked。
 5. 放行 Windows 防火墙中 RustDesk 的 UDP 入站和出站。
@@ -127,6 +153,7 @@ git push -u neko feat/interface-ipv6-candidate-p2p
 ## 多设备 E2E 通过条件
 
 - macOS 和 Windows 运行同一个 fork commit。
+- ID server 运行 patched hbbs，且 hbbs 日志能看到 `socket_addr_v6_non_empty=true`。
 - 双端均有全局 IPv6；如果 ICMP 被阻断，需要日志和 UDP socket 证据继续验证。
 - macOS 在 STUN IPv6 DNS / route 受阻时仍准备非空 `socket_addr_v6`。
 - Windows 受控端回传非空 `socket_addr_v6`。
@@ -137,6 +164,7 @@ git push -u neko feat/interface-ipv6-candidate-p2p
 ## 未关闭风险
 
 - 未在真实 Windows fork artifact 上验证最终连接类型。
+- 未部署 patched hbbs 到实际 ID server；旧 hbbs 已证明会导致 `socket_addr_v6` 无法到达 Windows。
 - 未验证 Clash Party / mihomo 阻断 STUN IPv6 时的真实日志。
 - 未验证运营商 IPv6 入站、防火墙和 NAT 行为是否允许 UDP direct。
 - 未验证 direct 延迟是否低于 forced relay baseline。

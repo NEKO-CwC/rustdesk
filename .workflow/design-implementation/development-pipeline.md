@@ -4,14 +4,15 @@ Status: active
 
 ## 目标
 
-本流水线用于把 `Interface IPv6 Candidate P2P` 从冻结 PRD 推进到代码实现、macOS 本机验证、推送 fork、Windows 同 commit E2E 验证。它是执行顺序说明，不替代 `prd.md`、`design.md`、`tasks/` 或 `traceability-matrix.md`。
+本流水线用于把 `Interface IPv6 Candidate P2P` 从冻结 PRD 推进到代码实现、macOS 本机验证、patched hbbs 部署、推送 fork、Windows 同 commit E2E 验证。它是执行顺序说明，不替代 `prd.md`、`design.md`、`tasks/` 或 `traceability-matrix.md`。
 
 ## 阶段顺序
 
 ### 1. 冻结范围
 
-- `prd.md` 已冻结后，MVP 范围固定为：复用现有 `enable-ipv6-punch`，复用单个 `socket_addr_v6` 字段，不修改 rustdesk-server 协议，不新增 UI。
-- 后续若要新增多 candidate 协议、server 转发能力、诊断 UI 或新开关，必须重新打开 PRD。
+- `prd.md` 已冻结后的客户端 MVP 范围固定为：复用现有 `enable-ipv6-punch`，复用单个 `socket_addr_v6` 字段，不新增 UI。
+- 2026-07-01 runtime evidence 修正了早期假设：当前 `rustdesk-server` 会解析后重组 rendezvous 消息，旧 hbbs 不转发 `socket_addr_v6`，因此必须部署 patched hbbs 才能进行真实 IPv6 P2P 验收。
+- 后续若要新增多 candidate 协议、诊断 UI 或新开关，必须重新打开 PRD。
 
 ### 2. 准备 Git 分支
 
@@ -81,7 +82,7 @@ cargo build --locked --lib
 
 ### 6. 推送到 fork 的时机
 
-推送发生在 macOS 代码级验证通过之后，不等待 Windows E2E 完成。原因是 Windows 必须运行同一个 fork commit，push 是跨设备同步点。
+客户端推送发生在 macOS 代码级验证通过之后，不等待 Windows E2E 完成。原因是 Windows 必须运行同一个 fork commit，push 是跨设备同步点。
 
 ```bash
 git push -u neko feat/interface-ipv6-candidate-p2p
@@ -93,6 +94,32 @@ git push -u neko feat/interface-ipv6-candidate-p2p
 - commit hash
 - macOS 测试命令与结果
 - macOS artifact 路径或启动方式
+
+### 6.5. 部署 patched hbbs 前置条件
+
+真实 E2E 前必须先部署 patched `rustdesk-server`，否则 Windows 收不到 Mac 发出的 `socket_addr_v6`，不会启动 IPv6 responder，连接会继续落到 relay。
+
+本地 server 补丁仓库：
+
+```bash
+cd /Users/neko/Documents/Project/rustdesk-server
+```
+
+必须包含：
+
+- `libs/hbb_common/protos/rendezvous.proto` 对齐客户端连接相关字段，至少包含 `PunchHoleRequest.socket_addr_v6`、`PunchHole.socket_addr_v6`、`PunchHoleSent.socket_addr_v6`、`PunchHoleResponse.socket_addr_v6`、`RelayResponse.socket_addr_v6`、`FetchLocalAddr.socket_addr_v6`、`LocalAddr.socket_addr_v6`。
+- `src/rendezvous_server.rs` 在 A->B 和 B->A 两个方向转发 `socket_addr_v6`，并保留 UDP / UPnP 相关字段。
+- `cargo check --locked` 通过。
+- 目标服务器实际运行 patched `hbbs`，不是只编译客户端。
+
+当前 macOS 本机 release 产物仅用于本机参考：
+
+```text
+/Users/neko/Documents/Project/rustdesk-server/target/release/hbbs
+/Users/neko/Documents/Project/rustdesk-server/target/release/hbbr
+```
+
+注意：上述二进制是 `Mach-O arm64`，不能直接部署到常见 Linux 服务器。Linux 服务器应在服务器上构建，或使用匹配目标架构的交叉编译产物。
 
 ### 7. Windows 获取同 commit 构建
 
@@ -117,7 +144,7 @@ Windows 不必须使用本地源码构建；但它必须运行与 macOS 端相�
 
 任务：
 1. 记录 commit hash、artifact 路径、启动时间。
-2. 配置与 macOS 相同的自建 ID server / relay server / key。
+2. 确认自建 ID server 正在运行 patched hbbs，并配置与 macOS 相同的 ID server / relay server / key。
 3. 启用 enable-ipv6-punch 和 enable-udp-punch，关闭 force relay、proxy、WebSocket-only。
 4. 确认 Windows 有全局 IPv6：运行 ipconfig，记录 IPv6 地址；如果可以，ping -6 macOS 的 IPv6。
 5. 放行 Windows 防火墙中 RustDesk 的 UDP 入站和出站。
@@ -130,6 +157,7 @@ Windows 不必须使用本地源码构建；但它必须运行与 macOS 端相�
 ### 9. 多设备 E2E 通过标准
 
 - macOS 和 Windows 运行同一个 fork commit。
+- ID server 运行 patched hbbs，且 hbbs 日志能看到 `socket_addr_v6_non_empty=true`。
 - 双端均记录全局 IPv6；如果 ICMP 被阻断，必须记录为 `ICMP blocked`，并继续检查 RustDesk 运行时证据。
 - macOS 在 STUN IPv6 DNS / route 受阻时仍准备非空 `socket_addr_v6`。
 - Windows 受控端回传非空 `socket_addr_v6`。
@@ -139,7 +167,6 @@ Windows 不必须使用本地源码构建；但它必须运行与 macOS 端相�
 
 ### 10. 失败分流
 
-- 如果最终是 `Relay`：先检查 macOS 或 Windows 是否有一端 `socket_addr_v6` 为空，再检查 force relay / proxy / firewall / 无全局 IPv6。
+- 如果最终是 `Relay`：先检查 hbbs 是否已部署 patched 版本，再检查 hbbs 是否记录 `socket_addr_v6_non_empty=true`；随后检查 macOS 或 Windows 是否有一端 `socket_addr_v6` 为空，再检查 force relay / proxy / firewall / 无全局 IPv6。
 - 如果 `socket_addr_v6` 非空但 IPv6 连接失败：检查 Windows 防火墙、运营商 IPv6 入站策略、UDP 端口绑定、RustDesk 日志中的 IPv6 connect 错误。
 - 如果最终是 `IPv6` 但延迟仍接近 relay：记录 `ping -6`、路由路径、运营商跨网情况和 RustDesk 会话延迟样本，将性能验收标记为 failed 或 blocked。
-
