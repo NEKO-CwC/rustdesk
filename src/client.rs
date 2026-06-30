@@ -79,6 +79,10 @@ use scrap::{
     CodecFormat, ImageFormat, ImageRgb, ImageTexture,
 };
 
+fn socket_addr_v6_has_port(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && AddrMangle::decode(bytes).port() > 0
+}
+
 #[cfg(not(target_os = "ios"))]
 use crate::clipboard::CLIPBOARD_INTERVAL;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -451,8 +455,9 @@ impl Client {
         let mut ipv6 = if crate::get_ipv6_punch_enabled() {
             if let Some((socket, addr)) = crate::get_ipv6_socket().await {
                 log::debug!(
-                    "Prepared non-empty socket_addr_v6 for punch request: {}",
-                    !addr.is_empty()
+                    "Prepared non-empty socket_addr_v6 for punch request: {}, has_port: {}",
+                    !addr.is_empty(),
+                    socket_addr_v6_has_port(&addr)
                 );
                 (Some(socket), Some(addr))
             } else {
@@ -524,14 +529,19 @@ impl Client {
                                     udp.0 = Some(s);
                                 }
                             }
+                            let response_v6_has_port = socket_addr_v6_has_port(&ph.socket_addr_v6);
+                            log::debug!(
+                                "PunchHoleResponse socket_addr_v6: non_empty={}, has_port={}, local_ipv6_socket_available={}",
+                                !ph.socket_addr_v6.is_empty(),
+                                response_v6_has_port,
+                                ipv6.0.is_some()
+                            );
                             let s = ipv6.0.take();
-                            if !ph.socket_addr_v6.is_empty() && s.is_some() {
+                            if response_v6_has_port && s.is_some() {
                                 let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
-                                    if let Some(s) = s {
-                                        allow_err!(s.connect(addr).await);
-                                        ipv6.0 = Some(s);
-                                    }
+                                if let Some(s) = s {
+                                    allow_err!(s.connect(addr).await);
+                                    ipv6.0 = Some(s);
                                 }
                             }
                             log::info!("{} Hole Punched {} = {}", punch_type, peer, peer_addr);
@@ -546,9 +556,16 @@ impl Client {
                         );
                         start = Instant::now();
                         let mut connect_futures = Vec::new();
+                        let response_v6_has_port = socket_addr_v6_has_port(&rr.socket_addr_v6);
+                        log::debug!(
+                            "RelayResponse socket_addr_v6: non_empty={}, has_port={}, local_ipv6_socket_available={}",
+                            !rr.socket_addr_v6.is_empty(),
+                            response_v6_has_port,
+                            ipv6.0.is_some()
+                        );
                         if let Some(s) = ipv6.0 {
-                            let addr = AddrMangle::decode(&rr.socket_addr_v6);
-                            if addr.port() > 0 {
+                            if response_v6_has_port {
+                                let addr = AddrMangle::decode(&rr.socket_addr_v6);
                                 if s.connect(addr).await.is_ok() {
                                     connect_futures
                                         .push(udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed());
@@ -696,6 +713,11 @@ impl Client {
         }
         log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
         let start = std::time::Instant::now();
+        log::debug!(
+            "Direct candidate sockets before connect: tcp=true, udp_nat={}, ipv6={}",
+            udp_socket_nat.is_some(),
+            udp_socket_v6.is_some()
+        );
 
         let mut connect_futures = Vec::new();
         let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
@@ -4293,17 +4315,33 @@ async fn udp_nat_connect(
     typ: &'static str,
     ms_timeout: u64,
 ) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    let local = socket
+        .local_addr()
+        .ok()
+        .map(|addr| (addr.is_ipv6(), addr.port()));
+    let peer = socket
+        .peer_addr()
+        .ok()
+        .map(|addr| (addr.is_ipv6(), addr.port()));
+    log::debug!(
+        "Starting {} UDP/KCP connect: local={:?}, peer={:?}, timeout={}ms",
+        typ,
+        local,
+        peer,
+        ms_timeout
+    );
     crate::punch_udp(socket.clone(), false)
         .await
         .map_err(|err| {
-            log::debug!("{err}");
+            log::debug!("{} UDP punch failed: {}", typ, err);
             anyhow!(err)
         })?;
     let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
         .await
         .map_err(|err| {
-            log::debug!("Failed to connect KCP stream: {}", err);
+            log::debug!("{} KCP connect failed: {}", typ, err);
             anyhow!(err)
         })?;
+    log::debug!("{} UDP/KCP connect succeeded", typ);
     Ok((res.1, Some(res.0), typ))
 }

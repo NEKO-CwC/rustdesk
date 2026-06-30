@@ -43,6 +43,10 @@ fn connection_meta(
     }
 }
 
+fn socket_addr_v6_has_port(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && AddrMangle::decode(bytes).port() > 0
+}
+
 lazy_static::lazy_static! {
     static ref SOLVING_PK_MISMATCH: Mutex<String> = Default::default();
     static ref LAST_MSG: Mutex<(SocketAddr, Instant)> = Mutex::new((SocketAddr::new([0; 4].into(), 0), Instant::now()));
@@ -531,11 +535,13 @@ impl RendezvousMediator {
     ) -> ResultType<()> {
         let peer_addr = AddrMangle::decode(&socket_addr);
         log::info!(
-            "create_relay requested from {:?}, relay_server: {}, uuid: {}, secure: {}",
+            "create_relay requested from {:?}, relay_server: {}, uuid: {}, secure: {}, socket_addr_v6_non_empty: {}, socket_addr_v6_has_port: {}",
             peer_addr,
             relay_server,
             uuid,
             secure,
+            !socket_addr_v6.is_empty(),
+            socket_addr_v6_has_port(&socket_addr_v6),
         );
 
         let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
@@ -578,13 +584,26 @@ impl RendezvousMediator {
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&fla.socket_addr_v6);
         let relay_server = self.get_relay_server(fla.relay_server.clone());
         let relay = use_ws() || Config::is_proxy();
+        let peer_v6_has_port = socket_addr_v6_has_port(&fla.socket_addr_v6);
+        log::debug!(
+            "FetchLocalAddr socket_addr_v6: non_empty={}, has_port={}, relay_mode={}",
+            !fla.socket_addr_v6.is_empty(),
+            peer_v6_has_port,
+            relay
+        );
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
             fla.control_permissions.clone().into_option(),
             fla.controlled_context.clone().into_option(),
         );
-        if peer_addr_v6.port() > 0 && !relay {
+        if peer_v6_has_port && !relay {
             socket_addr_v6 = start_ipv6(peer_addr_v6, addr, server.clone(), meta.clone()).await;
+        } else {
+            log::debug!(
+                "Skip IPv6 responder for FetchLocalAddr: peer_v6_has_port={}, relay_mode={}",
+                peer_v6_has_port,
+                relay
+            );
         }
         if is_ipv4(&self.addr) && !relay && !config::is_disable_tcp_listen() {
             if let Err(err) = self
@@ -657,14 +676,29 @@ impl RendezvousMediator {
         }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&ph.socket_addr_v6);
         let relay = use_ws() || Config::is_proxy() || ph.force_relay;
+        let peer_v6_has_port = socket_addr_v6_has_port(&ph.socket_addr_v6);
+        log::debug!(
+            "PunchHole socket_addr_v6: non_empty={}, has_port={}, relay_mode={}, force_relay={}",
+            !ph.socket_addr_v6.is_empty(),
+            peer_v6_has_port,
+            relay,
+            ph.force_relay
+        );
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
             ph.control_permissions.into_option(),
             ph.controlled_context.into_option(),
         );
-        if peer_addr_v6.port() > 0 && !relay {
+        if peer_v6_has_port && !relay {
             socket_addr_v6 =
                 start_ipv6(peer_addr_v6, peer_addr, server.clone(), meta.clone()).await;
+        } else {
+            log::debug!(
+                "Skip IPv6 responder for PunchHole: peer_v6_has_port={}, relay_mode={}, force_relay={}",
+                peer_v6_has_port,
+                relay,
+                ph.force_relay
+            );
         }
         let relay_server = self.get_relay_server(ph.relay_server);
         // for ensure, websocket go relay directly
